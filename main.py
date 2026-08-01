@@ -11,39 +11,23 @@ SEARCH_QUERIES = {
     "iPhone 14 Pro (до 200к)": ("iphone 14 pro", 200000),
 }
 
-CITY_ID   = 87
-REGION_ID = 13
+CITY_ID, REGION_ID = 87, 13
 CHECK_INTERVAL = 15
-SEEN_FILE = "/sdcard/seen_ads.json"
-
-# Мобильный API OLX — обновляется быстрее веб версии
-MOBILE_API = "https://www.olx.kz/api/v1/offers/"
-
-# Заголовки мобильного приложения OLX
+SEEN_FILE = "seen_ads.json"
+API_URL = "https://www.olx.kz/api/v1/offers/"
 HEADERS = {
     "User-Agent": "OLX-Android/15.27.0 (Android 12; Samsung SM-G991B)",
     "Accept": "application/json",
     "Accept-Language": "ru-RU",
-    "x-olx-app-version": "15.27.0",
-    "x-olx-platform": "android",
     "Referer": "https://www.olx.kz/",
 }
 
 def fetch_ads(query, max_price):
-    params = {
-        "query": query,
-        "city_id": CITY_ID,
-        "region_id": REGION_ID,
-        "filter_float_price:to": max_price,
-        "sort_by": "created_at:desc",
-        "limit": 50,
-    }
     try:
-        resp = requests.get(MOBILE_API, headers=HEADERS, params=params, timeout=10)
+        resp = requests.get(API_URL, headers=HEADERS, params={"query": query, "city_id": CITY_ID, "region_id": REGION_ID, "filter_float_price:to": max_price, "sort_by": "created_at:desc", "limit": 50}, timeout=10)
         print(f"    HTTP {resp.status_code}")
         if resp.status_code != 200:
             return []
-
         ads = []
         for o in resp.json().get("data", []):
             if o.get("location", {}).get("city", {}).get("id") != CITY_ID:
@@ -53,13 +37,7 @@ def fetch_ads(query, max_price):
                 if p.get("key") == "price":
                     price = p.get("value", {}).get("label", price)
             if o.get("id") and o.get("url"):
-                ads.append({
-                    "id":    str(o["id"]),
-                    "title": o.get("title", "-"),
-                    "price": price,
-                    "url":   o["url"],
-                    "time":  o.get("created_time", ""),
-                })
+                ads.append({"id": str(o["id"]), "title": o.get("title", "-"), "price": price, "url": o["url"]})
         return ads
     except Exception as e:
         print(f"    Ошибка: {e}")
@@ -75,11 +53,9 @@ def save_seen(seen):
 
 def send_telegram(text):
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
             json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
-            timeout=10
-        )
+            timeout=10)
         return r.status_code == 200
     except: return False
 
@@ -93,13 +69,7 @@ def check_olx(seen):
         print(f"    Найдено: {len(ads)}, новых: {len(new_ads)}")
         for ad in new_ads:
             seen.add(ad["id"])
-            send_telegram(
-                f"⚡️ <b>{name}</b>\n\n"
-                f"📌 {ad['title']}\n"
-                f"💰 {ad['price']}\n"
-                f"📍 Астана\n"
-                f"🔗 {ad['url']}"
-            )
+            send_telegram(f"⚡️ <b>{name}</b>\n\n📌 {ad['title']}\n💰 {ad['price']}\n📍 Астана\n🔗 {ad['url']}")
             new_count += 1
             time.sleep(0.3)
         time.sleep(1)
@@ -114,10 +84,10 @@ if not seen:
     save_seen(seen)
     print(f"База: {len(seen)} объявлений")
 
-send_telegram("✅ <b>OLX бот запущен!</b>\n📍 Астана\n\n" + "\n".join(f"• {n}" for n in SEARCH_QUERIES))
+send_telegram("✅ <b>OLX бот запущен на сервере!</b>\n📍 Астана\n\n" + "\n".join(f"• {n}" for n in SEARCH_QUERIES))
 
 while True:
     n = check_olx(seen)
     save_seen(seen)
     print(f"Новых: {n}. Жду {CHECK_INTERVAL} сек...")
-    time.sleep(CHECK_INTERVAL)
+    time.sleep(CHECK_INTERVAL)    
