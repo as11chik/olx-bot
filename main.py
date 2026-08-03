@@ -1,93 +1,178 @@
-import requests, time, json
+import requests
+import asyncio
+import re
+from bs4 import BeautifulSoup
+from telegram import Bot
 
-TOKEN   = "8675707834:AAHB2VIOpYyvzn-yJhv3EtrNZ8Flu8UxYu0"
+# ===== НАСТРОЙКИ =====
+BOT_TOKEN = "8675707834:AAHB2VIOpYyvzn-yJhv3EtrNZ8Flu8UxYu0"
 CHAT_ID = "1806974839"
+CHECK_INTERVAL = 15  # Проверка каждые 15 секунд
 
-SEARCH_QUERIES = {
-    "iPhone (до 250к)":        ("iphone",        250000),
-    "iPhone 13 (до 90к)":      ("iphone 13",     90000),
-    "iPhone 13 Pro (до 120к)": ("iphone 13 pro", 120000),
-    "iPhone 14 (до 90к)":      ("iphone 14",     90000),
-    "iPhone 14 Pro (до 200к)": ("iphone 14 pro", 200000),
+# ===== ФИЛЬТРЫ: модель → максимальная цена =====
+IPHONE_FILTERS = {
+    "iphone 16 pro": 325000,
+    "iphone 16 pro max": 325000,
+    "iphone 16 plus": 280000,
+    "iphone 16":      280000,
+    "iphone 15 pro":  300000,
+    "iphone 15 pro max": 300000,
+    "iphone 15 plus": 200000,
+    "iphone 15":      200000,
+    "iphone 14 pro":  200000,
+    "iphone 14 pro max": 200000,
+    "iphone 14 plus": 105000,
+    "iphone 14":      105000,
+    "iphone 13 pro":  120000,
+    "iphone 13 pro max": 120000,
+    "iphone 13 mini": 90000,
+    "iphone 13":      90000,
 }
 
-CITY_ID, REGION_ID = 87, 13
-CHECK_INTERVAL = 15
-SEEN_FILE = "seen_ads.json"
-API_URL = "https://www.olx.kz/api/v1/offers/"
-HEADERS = {
-    "User-Agent": "OLX-Android/15.27.0 (Android 12; Samsung SM-G991B)",
-    "Accept": "application/json",
-    "Accept-Language": "ru-RU",
-    "Referer": "https://www.olx.kz/",
-}
+MAX_PRICE_GENERAL = 250000
+OLX_URL = "https://www.olx.kz/elektronika/telefony-i-aksessuary/mobilnye-telefony/astana/"
+SEEN_FILE = "seen_ids.txt"
 
-def fetch_ads(query, max_price):
+def load_seen_ids():
     try:
-        resp = requests.get(API_URL, headers=HEADERS, params={"query": query, "city_id": CITY_ID, "region_id": REGION_ID, "filter_float_price:to": max_price, "sort_by": "created_at:desc", "limit": 50}, timeout=10)
-        print(f"    HTTP {resp.status_code}")
-        if resp.status_code != 200:
-            return []
-        ads = []
-        for o in resp.json().get("data", []):
-            if o.get("location", {}).get("city", {}).get("id") != CITY_ID:
-                continue
-            price = "Цена не указана"
-            for p in o.get("params", []):
-                if p.get("key") == "price":
-                    price = p.get("value", {}).get("label", price)
-            if o.get("id") and o.get("url"):
-                ads.append({"id": str(o["id"]), "title": o.get("title", "-"), "price": price, "url": o["url"]})
-        return ads
+        with open(SEEN_FILE, "r") as f:
+            return set(line.strip() for line in f.readlines())
+    except FileNotFoundError:
+        return set()
+
+def save_seen_id(ad_id):
+    with open(SEEN_FILE, "a") as f:
+        f.write(ad_id + "\n")
+
+def extract_price(price_str):
+    digits = re.sub(r"[^\d]", "", price_str)
+    return int(digits) if digits else None
+
+def detect_model(title):
+    title_lower = title.lower()
+    for model in sorted(IPHONE_FILTERS.keys(), key=len, reverse=True):
+        if model in title_lower:
+            return model
+    return None
+
+def is_suitable(title, price):
+    if price is None:
+        return False, None
+    title_lower = title.lower()
+    if "iphone" not in title_lower:
+        return False, None
+    model = detect_model(title)
+    if model:
+        max_price = IPHONE_FILTERS[model]
+        if price <= max_price:
+            return True, model
+    else:
+        if price <= MAX_PRICE_GENERAL:
+            return True, "iPhone (модель не определена)"
+    return False, None
+
+def get_ads():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        response = requests.get(OLX_URL, headers=headers, timeout=15)
+        response.raise_for_status()
     except Exception as e:
-        print(f"    Ошибка: {e}")
+        print(f"[ОШИБКА] Не удалось загрузить OLX: {e}")
         return []
 
-def load_seen():
-    try:
-        with open(SEEN_FILE) as f: return set(json.load(f))
-    except: return set()
+    soup = BeautifulSoup(response.text, "html.parser")
+    ads = []
 
-def save_seen(seen):
-    with open(SEEN_FILE, "w") as f: json.dump(list(seen), f)
+    for item in soup.select("[data-cy='l-card']"):
+        try:
+            link_tag = item.find("a")
+            title_tag = item.find("h4") or item.find("h6") or item.find("h3")
+            price_tag = item.find("p", {"data-testid": "ad-price"})
+            location_tag = item.find("p", {"data-testid": "location-date"})
 
-def send_telegram(text):
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
-            timeout=10)
-        return r.status_code == 200
-    except: return False
+            if not link_tag or not title_tag:
+                continue
 
-def check_olx(seen):
-    print(f"[{time.strftime('%H:%M:%S')}] Проверяю...")
-    new_count = 0
-    for name, (query, max_price) in SEARCH_QUERIES.items():
-        print(f"  ▶ {name}")
-        ads = fetch_ads(query, max_price)
-        new_ads = [a for a in ads if a["id"] not in seen]
-        print(f"    Найдено: {len(ads)}, новых: {len(new_ads)}")
-        for ad in new_ads:
-            seen.add(ad["id"])
-            send_telegram(f"⚡️ <b>{name}</b>\n\n📌 {ad['title']}\n💰 {ad['price']}\n📍 Астана\n🔗 {ad['url']}")
-            new_count += 1
-            time.sleep(0.3)
-        time.sleep(1)
-    return new_count
+            href = link_tag.get("href", "")
+            ad_id = href.split("-")[-1].replace(".html", "").strip("/")
+            title = title_tag.text.strip()
+            price_raw = price_tag.text.strip() if price_tag else ""
+            price = extract_price(price_raw)
+            location = location_tag.text.strip() if location_tag else "Локация не указана"
 
-seen = load_seen()
-if not seen:
-    print("Первый запуск — собираю базу...")
-    for name, (query, max_price) in SEARCH_QUERIES.items():
-        for a in fetch_ads(query, max_price): seen.add(a["id"])
-        time.sleep(2)
-    save_seen(seen)
-    print(f"База: {len(seen)} объявлений")
+            if href.startswith("http"):
+                url = href
+            else:
+                url = "https://www.olx.kz" + href
 
-send_telegram("✅ <b>OLX бот запущен!</b>\n📍 Астана\n\n" + "\n".join(f"• {n}" for n in SEARCH_QUERIES))
+            ads.append({
+                "id": ad_id,
+                "title": title,
+                "price": price,
+                "price_raw": price_raw or "Цена не указана",
+                "location": location,
+                "url": url,
+            })
+        except Exception:
+            continue
 
-while True:
-    n = check_olx(seen)
-    save_seen(seen)
-    print(f"Новых: {n}. Жду {CHECK_INTERVAL} сек...")
-    time.sleep(CHECK_INTERVAL)
+    return ads
+
+async def send_ad(bot, ad, model):
+    max_price = IPHONE_FILTERS.get(model, MAX_PRICE_GENERAL)
+    price_display = f"{ad['price']:,}".replace(",", " ") + " ₸" if ad["price"] else ad["price_raw"]
+
+    text = (
+        f"📱 *Новый iPhone на OLX!*\n\n"
+        f"*{ad['title']}*\n\n"
+        f"💰 Цена: *{price_display}*\n"
+        f"🏷 Лимит для этой модели: *{max_price:,}* ₸\n".replace(",", " ") +
+        f"📍 {ad['location']}\n\n"
+        f"🔗 [Открыть объявление]({ad['url']})"
+    )
+
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=text,
+        parse_mode="Markdown",
+        disable_web_page_preview=False
+    )
+
+async def main():
+    bot = Bot(token=BOT_TOKEN)
+    seen_ids = load_seen_ids()
+
+    print("✅ Бот запущен!")
+
+    while True:
+        print(f"[{__import__('datetime').datetime.now().strftime('%H:%M:%S')}] Проверяю OLX...")
+        ads = get_ads()
+        new_count = 0
+
+        for ad in ads:
+            if ad["id"] in seen_ids:
+                continue
+
+            suitable, model = is_suitable(ad["title"], ad["price"])
+
+            if suitable:
+                try:
+                    await send_ad(bot, ad, model)
+                    print(f"✅ Отправлено: {ad['title']} — {ad['price_raw']}")
+                    new_count += 1
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    print(f"❌ Ошибка отправки: {e}")
+
+            seen_ids.add(ad["id"])
+            save_seen_id(ad["id"])
+
+        print(f"Новых подходящих: {new_count}")
+        await asyncio.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+    asyncio.run(main())
