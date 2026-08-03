@@ -4,22 +4,11 @@ TOKEN   = "8675707834:AAHB2VIOpYyvzn-yJhv3EtrNZ8Flu8UxYu0"
 CHAT_ID = "1806974839"
 
 SEARCH_QUERIES = {
-    "iphone 16 pro": 325000,
-    "iphone 16 pro max": 325000,
-    "iphone 16 plus": 280000,
-    "iphone 16":      280000,
-    "iphone 15 pro":  300000,
-    "iphone 15 pro max": 300000,
-    "iphone 15 plus": 200000,
-    "iphone 15":      200000,
-    "iphone 14 pro":  200000,
-    "iphone 14 pro max": 200000,
-    "iphone 14 plus": 105000,
-    "iphone 14":      105000,
-    "iphone 13 pro":  120000,
-    "iphone 13 pro max": 120000,
-    "iphone 13 mini": 90000,
-    "iphone 13":      90000,
+    "iPhone (до 250к)":        ("iphone",        250000),
+    "iPhone 13 (до 90к)":      ("iphone 13",     90000),
+    "iPhone 13 Pro (до 120к)": ("iphone 13 pro", 120000),
+    "iPhone 14 (до 90к)":      ("iphone 14",     90000),
+    "iPhone 14 Pro (до 200к)": ("iphone 14 pro", 200000),
 }
 
 CITY_ID, REGION_ID = 87, 13
@@ -102,4 +91,3 @@ while True:
     save_seen(seen)
     print(f"Новых: {n}. Жду {CHECK_INTERVAL} сек...")
     time.sleep(CHECK_INTERVAL)
-                
