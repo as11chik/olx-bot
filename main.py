@@ -1,48 +1,43 @@
-import requests, time, json, re
-from bs4 import BeautifulSoup
+import requests, time, json
 
 TOKEN   = "8675707834:AAHB2VIOpYyvzn-yJhv3EtrNZ8Flu8UxYu0"
 CHAT_ID = "1806974839"
 
 SEARCH_QUERIES = {
-    "iPhone (до 250к)":        "https://m.olx.kz/list/q-iphone/?search[filter_float_price:to]=250000&search[city_id]=87&search[order]=created_at:desc",
-    "iPhone 13 (до 90к)":      "https://m.olx.kz/list/q-iphone-13/?search[filter_float_price:to]=90000&search[city_id]=87&search[order]=created_at:desc",
-    "iPhone 13 Pro (до 120к)": "https://m.olx.kz/list/q-iphone-13-pro/?search[filter_float_price:to]=120000&search[city_id]=87&search[order]=created_at:desc",
-    "iPhone 14 (до 90к)":      "https://m.olx.kz/list/q-iphone-14/?search[filter_float_price:to]=90000&search[city_id]=87&search[order]=created_at:desc",
-    "iPhone 14 Pro (до 200к)": "https://m.olx.kz/list/q-iphone-14-pro/?search[filter_float_price:to]=200000&search[city_id]=87&search[order]=created_at:desc",
+    "iPhone (до 250к)":        ("iphone",        250000),
+    "iPhone 13 (до 90к)":      ("iphone 13",     90000),
+    "iPhone 13 Pro (до 120к)": ("iphone 13 pro", 120000),
+    "iPhone 14 (до 90к)":      ("iphone 14",     90000),
+    "iPhone 14 Pro (до 200к)": ("iphone 14 pro", 200000),
 }
 
+CITY_ID, REGION_ID = 87, 13
 CHECK_INTERVAL = 15
 SEEN_FILE = "seen_ads.json"
-
+API_URL = "https://www.olx.kz/api/v1/offers/"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 12; Samsung SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
-    "Accept-Language": "ru-RU,ru;q=0.9",
-    "Accept": "text/html,application/xhtml+xml",
+    "User-Agent": "OLX-Android/15.27.0 (Android 12; Samsung SM-G991B)",
+    "Accept": "application/json",
+    "Accept-Language": "ru-RU",
+    "Referer": "https://www.olx.kz/",
 }
 
-def fetch_ads(url):
+def fetch_ads(query, max_price):
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(API_URL, headers=HEADERS, params={"query": query, "city_id": CITY_ID, "region_id": REGION_ID, "filter_float_price:to": max_price, "sort_by": "created_at:desc", "limit": 50}, timeout=10)
         print(f"    HTTP {resp.status_code}")
         if resp.status_code != 200:
             return []
-        soup = BeautifulSoup(resp.text, "html.parser")
         ads = []
-        seen_ids = set()
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if "/d/obyavlenie/" in href or "/obyavlenie/" in href:
-                m = re.search(r'(\d+)\.html', href)
-                if not m:
-                    continue
-                ad_id = m.group(1)
-                if ad_id in seen_ids:
-                    continue
-                seen_ids.add(ad_id)
-                full_url = href if href.startswith("http") else "https://m.olx.kz" + href
-                title = a.get_text(strip=True) or "-"
-                ads.append({"id": ad_id, "title": title[:100], "url": full_url})
+        for o in resp.json().get("data", []):
+            if o.get("location", {}).get("city", {}).get("id") != CITY_ID:
+                continue
+            price = "Цена не указана"
+            for p in o.get("params", []):
+                if p.get("key") == "price":
+                    price = p.get("value", {}).get("label", price)
+            if o.get("id") and o.get("url"):
+                ads.append({"id": str(o["id"]), "title": o.get("title", "-"), "price": price, "url": o["url"]})
         return ads
     except Exception as e:
         print(f"    Ошибка: {e}")
@@ -67,14 +62,14 @@ def send_telegram(text):
 def check_olx(seen):
     print(f"[{time.strftime('%H:%M:%S')}] Проверяю...")
     new_count = 0
-    for name, url in SEARCH_QUERIES.items():
+    for name, (query, max_price) in SEARCH_QUERIES.items():
         print(f"  ▶ {name}")
-        ads = fetch_ads(url)
+        ads = fetch_ads(query, max_price)
         new_ads = [a for a in ads if a["id"] not in seen]
         print(f"    Найдено: {len(ads)}, новых: {len(new_ads)}")
         for ad in new_ads:
             seen.add(ad["id"])
-            send_telegram(f"⚡️ <b>{name}</b>\n\n📌 {ad['title']}\n📍 Астана\n🔗 {ad['url']}")
+            send_telegram(f"⚡️ <b>{name}</b>\n\n📌 {ad['title']}\n💰 {ad['price']}\n📍 Астана\n🔗 {ad['url']}")
             new_count += 1
             time.sleep(0.3)
         time.sleep(1)
@@ -83,13 +78,13 @@ def check_olx(seen):
 seen = load_seen()
 if not seen:
     print("Первый запуск — собираю базу...")
-    for name, url in SEARCH_QUERIES.items():
-        for a in fetch_ads(url): seen.add(a["id"])
+    for name, (query, max_price) in SEARCH_QUERIES.items():
+        for a in fetch_ads(query, max_price): seen.add(a["id"])
         time.sleep(2)
     save_seen(seen)
     print(f"База: {len(seen)} объявлений")
 
-send_telegram("✅ <b>OLX бот запущен (HTML)!</b>\n📍 Астана\n\n" + "\n".join(f"• {n}" for n in SEARCH_QUERIES))
+send_telegram("✅ <b>OLX бот запущен!</b>\n📍 Астана\n\n" + "\n".join(f"• {n}" for n in SEARCH_QUERIES))
 
 while True:
     n = check_olx(seen)
