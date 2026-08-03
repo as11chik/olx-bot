@@ -30,7 +30,7 @@ IPHONE_FILTERS = {
 }
 
 MAX_PRICE_GENERAL = 250000
-OLX_URL = "https://www.olx.kz/elektronika/telefony-i-aksessuary/mobilnye-telefony/astana/"
+OLX_URL = "https://www.olx.kz/elektronika/telefony-i-aksesuary/mobilnye-telefony/astana/"
 SEEN_FILE = "seen_ids.txt"
 
 def load_seen_ids():
